@@ -1,15 +1,22 @@
 package main
 
 import (
+     _ "github.com/lib/pq"
+    "github.com/joho/godotenv"
     "log"
     "fmt"
     "net/http"
+    "strings"
     "sync/atomic"
     "encoding/json"
+    "database/sql"
+    "os"
+    "github.com/feagy/chirpy/internal/database"
 )
 
 type apiConfig struct {
     fileserverHits atomic.Int32
+    db *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -32,10 +39,19 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 }
 
 func main(){
+    godotenv.Load()
+    dbURL := os.Getenv("DB_URL")
+    db, err := sql.Open("postgres", dbURL)
+    if err != nil {
+        log.Fatal("An error occured during database connection")
+    }
+    dbQueries := database.New(db)
   	const filepathRoot = "."
 	const port = "8080"
 
-    apiCfg := apiConfig{fileserverHits:atomic.Int32{}}
+    apiCfg := apiConfig{
+        fileserverHits:atomic.Int32{},
+        db:dbQueries}
 	mux := http.NewServeMux()
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
@@ -65,7 +81,7 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 		Body string `json:"body"`
 	}
 	type returnVals struct {
-		Valid bool `json:"valid"`
+	    CleanedBody string `json:"cleaned_body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -82,8 +98,18 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+    bannedWords := []string{"kerfuffle", "sharbert", "fornax"}
+    words := strings.Split(params.Body, " ")
+    for _, banned := range bannedWords {
+        for i, word := range words {
+            if strings.ToLower(word) == banned {
+                words[i] = "****"  
+            }        
+        }
+    }  
+    
 	respondWithJSON(w, http.StatusOK, returnVals{
-		Valid: true,
+		CleanedBody: strings.Join(words, " "),
 	})
 }
 
