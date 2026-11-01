@@ -11,6 +11,7 @@ import (
     "encoding/json"
     "database/sql"
     "os"
+    "time"
     "github.com/feagy/chirpy/internal/database"
 )
 
@@ -34,8 +35,47 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
+    cfg.db.DeleteUsers(r.Context())
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Hits reset to 0"))
+}
+
+func (cfg *apiConfig) handlerUsersPost(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	type returnVals struct {
+    	ID        string `json:"id"`
+        CreatedAt string `json:"created_at"`
+        UpdatedAt string `json:"updated_at"`
+        Email     string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
+		return
+	}
+
+    if params.Email == "" {
+        respondWithError(w, http.StatusBadRequest, "Your email is empty be sure you use the true format for body", err)
+        return
+    }
+
+    user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
+		return
+	}
+
+    respondWithJSON(w, http.StatusCreated, returnVals{
+        ID: user.ID.String(),
+        CreatedAt: user.CreatedAt.Format(time.RFC3339),
+        UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+        Email: user.Email,
+    })
 }
 
 func main(){
@@ -55,8 +95,11 @@ func main(){
 	mux := http.NewServeMux()
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
-	mux.HandleFunc("GET /api/healthz", handlerReadiness)
+	
+    mux.HandleFunc("GET /api/healthz", handlerReadiness)
     mux.HandleFunc("POST /api/validate_chirp", handlerValidate)
+    mux.HandleFunc("POST /api/users", apiCfg.handlerUsersPost)
+    
     mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
     mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 
