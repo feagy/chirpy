@@ -13,6 +13,7 @@ import (
     "os"
     "time"
     "github.com/feagy/chirpy/internal/database"
+    "github.com/google/uuid"
 )
 
 type apiConfig struct {
@@ -45,9 +46,9 @@ func (cfg *apiConfig) handlerUsersPost(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	type returnVals struct {
-    	ID        string `json:"id"`
-        CreatedAt string `json:"created_at"`
-        UpdatedAt string `json:"updated_at"`
+    	ID        uuid.UUID `json:"id"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
         Email     string `json:"email"`
 	}
 
@@ -71,60 +72,24 @@ func (cfg *apiConfig) handlerUsersPost(w http.ResponseWriter, r *http.Request) {
 	}
 
     respondWithJSON(w, http.StatusCreated, returnVals{
-        ID: user.ID.String(),
-        CreatedAt: user.CreatedAt.Format(time.RFC3339),
-        UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+        ID: user.ID,
+        CreatedAt: user.CreatedAt,
+        UpdatedAt: user.UpdatedAt,
         Email: user.Email,
     })
 }
 
-func main(){
-    godotenv.Load()
-    dbURL := os.Getenv("DB_URL")
-    db, err := sql.Open("postgres", dbURL)
-    if err != nil {
-        log.Fatal("An error occured during database connection")
-    }
-    dbQueries := database.New(db)
-  	const filepathRoot = "."
-	const port = "8080"
-
-    apiCfg := apiConfig{
-        fileserverHits:atomic.Int32{},
-        db:dbQueries}
-	mux := http.NewServeMux()
-
-	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
-	
-    mux.HandleFunc("GET /api/healthz", handlerReadiness)
-    mux.HandleFunc("POST /api/validate_chirp", handlerValidate)
-    mux.HandleFunc("POST /api/users", apiCfg.handlerUsersPost)
-    
-    mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
-    mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
-
-
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
-	}
-
-	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
-	log.Fatal(srv.ListenAndServe())
-}
-
-func handlerReadiness(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(http.StatusText(http.StatusOK)))
-}
-
-func handlerValidate(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerChirpsPost(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
+        UserID uuid.UUID `json:"user_id"`
 	}
 	type returnVals struct {
-	    CleanedBody string `json:"cleaned_body"`
+	    ID uuid.UUID `json:"id"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Body      string `json:"body"`
+        UserID  uuid.UUID  `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -149,11 +114,60 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
                 words[i] = "****"  
             }        
         }
-    }  
+    }
+
+    chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+        Body: strings.Join(words, " "), 
+        UserID: params.UserID})
     
-	respondWithJSON(w, http.StatusOK, returnVals{
-		CleanedBody: strings.Join(words, " "),
+	respondWithJSON(w, http.StatusCreated, returnVals{
+        ID: chirp.ID,
+        CreatedAt: chirp.CreatedAt,
+        UpdatedAt: chirp.UpdatedAt,
+		Body: chirp.Body,
+        UserID: chirp.UserID,
 	})
+}
+
+func main(){
+    godotenv.Load()
+    dbURL := os.Getenv("DB_URL")
+    db, err := sql.Open("postgres", dbURL)
+    if err != nil {
+        log.Fatal("An error occured during database connection")
+    }
+    dbQueries := database.New(db)
+  	const filepathRoot = "."
+	const port = "8080"
+
+    apiCfg := apiConfig{
+        fileserverHits:atomic.Int32{},
+        db:dbQueries}
+	mux := http.NewServeMux()
+
+	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
+	
+    mux.HandleFunc("GET /api/healthz", handlerReadiness)
+    mux.HandleFunc("POST /api/chirps", apiCfg.handlerChirpsPost)
+    mux.HandleFunc("POST /api/users", apiCfg.handlerUsersPost)
+    
+    mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
+    mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
+
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+
+	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
+	log.Fatal(srv.ListenAndServe())
+}
+
+func handlerReadiness(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(http.StatusText(http.StatusOK)))
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string, err error) {
