@@ -119,6 +119,11 @@ func (cfg *apiConfig) handlerChirpsPost(w http.ResponseWriter, r *http.Request) 
     chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
         Body: strings.Join(words, " "), 
         UserID: params.UserID})
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error occured during chirp creation", err)
+		return
+	}
     
 	respondWithJSON(w, http.StatusCreated, returnVals{
         ID: chirp.ID,
@@ -128,6 +133,37 @@ func (cfg *apiConfig) handlerChirpsPost(w http.ResponseWriter, r *http.Request) 
         UserID: chirp.UserID,
 	})
 }
+
+func (cfg *apiConfig) handlerChirpsGet(w http.ResponseWriter, r *http.Request) {
+	type returnVals struct {
+	    ID uuid.UUID `json:"id"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Body      string `json:"body"`
+        UserID  uuid.UUID  `json:"user_id"`
+	}
+
+    chirps, err := cfg.db.GetAllChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error occured during chirp retrieval", err)
+		return
+	}
+
+    returnChirps := []returnVals{}
+    
+	for _, chirp := range chirps {
+		returnChirps = append(returnChirps, returnVals{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		})
+	}
+
+	respondWithJSON(w, http.StatusOK, returnChirps)
+}
+
 
 func main(){
     godotenv.Load()
@@ -149,6 +185,7 @@ func main(){
 	
     mux.HandleFunc("GET /api/healthz", handlerReadiness)
     mux.HandleFunc("POST /api/chirps", apiCfg.handlerChirpsPost)
+    mux.HandleFunc("GET /api/chirps", apiCfg.handlerChirpsGet)
     mux.HandleFunc("POST /api/users", apiCfg.handlerUsersPost)
     
     mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
