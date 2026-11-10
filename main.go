@@ -15,6 +15,7 @@ import (
     "github.com/feagy/chirpy/internal/database"
     "github.com/feagy/chirpy/internal/auth"
     "github.com/google/uuid"
+    "errors"
 )
 
 type apiConfig struct {
@@ -48,6 +49,7 @@ type User struct {
     CreatedAt time.Time `json:"created_at"`
     UpdatedAt time.Time `json:"updated_at"`
     Email     string `json:"email"`
+    IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 func (cfg *apiConfig) handlerUsersPost(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +88,7 @@ func (cfg *apiConfig) handlerUsersPost(w http.ResponseWriter, r *http.Request) {
         CreatedAt: user.CreatedAt,
         UpdatedAt: user.UpdatedAt,
         Email: user.Email,
+        IsChirpyRed: user.IsChirpyRed,
     })
 }
 
@@ -135,6 +138,7 @@ func (cfg *apiConfig) handlerUsersPut(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: user.CreatedAt,
 			UpdatedAt: user.UpdatedAt,
 			Email:     user.Email,
+            IsChirpyRed: user.IsChirpyRed,
 		})
 }
 
@@ -203,6 +207,7 @@ func (cfg *apiConfig) handlerUsersLogin(w http.ResponseWriter, r *http.Request) 
             CreatedAt: user.CreatedAt,
             UpdatedAt: user.UpdatedAt,
             Email: user.Email,
+            IsChirpyRed: user.IsChirpyRed,
         },
         Token: accessToken,
         RefreshToken: refreshToken})
@@ -405,6 +410,40 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID uuid.UUID `json:"user_id"`
+		}
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	_, err = cfg.db.UpgradeToChirpyRed(r.Context(), params.Data.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusNotFound, "Couldn't find user", err)
+			return
+		}
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update user", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func main(){
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
@@ -440,6 +479,8 @@ func main(){
     mux.HandleFunc("POST /api/users", apiCfg.handlerUsersPost)
     mux.HandleFunc("PUT /api/users", apiCfg.handlerUsersPut)
     mux.HandleFunc("POST /api/login", apiCfg.handlerUsersLogin)
+
+    mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerWebhook)
 
     mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
     mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
