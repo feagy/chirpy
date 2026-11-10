@@ -8,6 +8,8 @@ import (
     "fmt"
 	"net/http"
 	"strings"
+	"crypto/rand"
+	"encoding/hex"
 )
 
 func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration,) (string, error) {
@@ -63,4 +65,10 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 
 	return splitAuth[1], nil
+}
+
+func MakeRefreshToken() string {
+	token := make([]byte, 32)
+	rand.Read(token)
+	return hex.EncodeToString(token)
 }
