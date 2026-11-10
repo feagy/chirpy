@@ -22,6 +22,7 @@ type apiConfig struct {
     fileserverHits atomic.Int32
     db *database.Queries
     jwtSecret string
+    polkaKey string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -418,9 +419,19 @@ func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find api key", err)
+		return
+	}
+	if apiKey != cfg.polkaKey {
+		respondWithError(w, http.StatusUnauthorized, "API key is invalid", err)
+		return
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
@@ -448,11 +459,14 @@ func main(){
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
     jwtSecret := os.Getenv("JWT_SECRET")
-
 	if jwtSecret == "" {
 		log.Fatal("JWT_SECRET environment variable is not set")
 	}
-    
+
+    polkaKey := os.Getenv("POLKA_KEY")
+	if polkaKey == "" {
+		log.Fatal("POLKA_KEY environment variable is not set")
+	}
     
     db, err := sql.Open("postgres", dbURL)
     if err != nil {
@@ -465,7 +479,8 @@ func main(){
     apiCfg := apiConfig{
         fileserverHits:atomic.Int32{},
         db:dbQueries,
-        jwtSecret:jwtSecret,}
+        jwtSecret:jwtSecret,
+        polkaKey:polkaKey,}
 	mux := http.NewServeMux()
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
