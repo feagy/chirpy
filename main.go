@@ -20,6 +20,7 @@ import (
 type apiConfig struct {
     fileserverHits atomic.Int32
     db *database.Queries
+    jwtSecret string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -92,6 +93,12 @@ func (cfg *apiConfig) handlerUsersLogin(w http.ResponseWriter, r *http.Request) 
 	type parameters struct {
         Password string `json:"password"`
 		Email string `json:"email"`
+        ExpiresInSeconds int `json:"expires_in_seconds"`
+	}
+
+    type response struct {
+		User
+		Token        string `json:"token"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -119,12 +126,29 @@ func (cfg *apiConfig) handlerUsersLogin(w http.ResponseWriter, r *http.Request) 
         return
     }
 
-    respondWithJSON(w, http.StatusOK, User{
-        ID: user.ID,
-        CreatedAt: user.CreatedAt,
-        UpdatedAt: user.UpdatedAt,
-        Email: user.Email,
-    })
+	expirationTime := time.Hour
+	if params.ExpiresInSeconds > 0 && params.ExpiresInSeconds < 3600 {
+		expirationTime = time.Duration(params.ExpiresInSeconds) * time.Second
+	}
+
+	accessToken, err := auth.MakeJWT(
+		user.ID,
+		cfg.jwtSecret,
+		expirationTime,
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create access JWT", err)
+		return
+	}
+
+    respondWithJSON(w, http.StatusOK, response{
+        User:User{
+            ID: user.ID,
+            CreatedAt: user.CreatedAt,
+            UpdatedAt: user.UpdatedAt,
+            Email: user.Email,
+        },
+        Token: accessToken})
 }
 
 type Chirp struct {
@@ -138,12 +162,22 @@ type Chirp struct {
 func (cfg *apiConfig) handlerChirpsPost(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
-        UserID uuid.UUID `json:"user_id"`
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
+		return
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
@@ -167,7 +201,7 @@ func (cfg *apiConfig) handlerChirpsPost(w http.ResponseWriter, r *http.Request) 
 
     chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
         Body: strings.Join(words, " "), 
-        UserID: params.UserID})
+        UserID: userID})
 
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error occured during chirp creation", err)
@@ -232,6 +266,13 @@ func (cfg *apiConfig) handlerChirpsGetById(w http.ResponseWriter, r *http.Reques
 func main(){
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
+    jwtSecret := os.Getenv("JWT_SECRET")
+
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET environment variable is not set")
+	}
+    
+    
     db, err := sql.Open("postgres", dbURL)
     if err != nil {
         log.Fatal("An error occured during database connection")
@@ -242,7 +283,8 @@ func main(){
 
     apiCfg := apiConfig{
         fileserverHits:atomic.Int32{},
-        db:dbQueries}
+        db:dbQueries,
+        jwtSecret:jwtSecret,}
 	mux := http.NewServeMux()
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
