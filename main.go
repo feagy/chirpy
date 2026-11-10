@@ -16,6 +16,7 @@ import (
     "github.com/feagy/chirpy/internal/auth"
     "github.com/google/uuid"
     "errors"
+    "sort"
 )
 
 type apiConfig struct {
@@ -313,6 +314,13 @@ func (cfg *apiConfig) handlerChirpsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+    sortDirection := "asc"
+	sortDirectionParam := r.URL.Query().Get("sort")
+	if sortDirectionParam == "desc" {
+		sortDirection = "desc"
+	}
+
+
     returnChirps := []Chirp{}
     
 	for _, chirp := range chirps {
@@ -324,6 +332,13 @@ func (cfg *apiConfig) handlerChirpsGet(w http.ResponseWriter, r *http.Request) {
 			UserID:    chirp.UserID,
 		})
 	}
+
+    sort.Slice(returnChirps, func(i, j int) bool {
+		if sortDirection == "desc" {
+			return returnChirps[i].CreatedAt.After(returnChirps[j].CreatedAt)
+		}
+		return returnChirps[i].CreatedAt.Before(returnChirps[j].CreatedAt)
+	})
 
 	respondWithJSON(w, http.StatusOK, returnChirps)
 }
